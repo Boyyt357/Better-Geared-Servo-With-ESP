@@ -2,14 +2,13 @@
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
 
-// --- Pins (ESP32-S3) ---
+
 const int motorIN1 = 16; 
 const int motorIN2 = 17; 
 const int motorENA = 18; 
 const int feedbackPotPin = 35;  // Internal MG996R Potentiometer (Position Feedback)
 const int inputPin = 4;        // External Control Signal (RC PWM or Analog Volts)
 
-// --- PWM Hardware Settings (ESP32 v3.x API) ---
 const int pwmFreq = 20000;      // 20kHz to remove audible motor whine
 const int pwmResolution = 8;    // 8-bit resolution (0-255)
 
@@ -25,27 +24,27 @@ float minLimitDeg = 0.0;
 float filteredFeedback = 0;
 float filterAlpha = 0.15; // 0.1 (very smooth) to 0.8 (fast/noisy)
 
-// --- RC PWM Variables ---
+
 volatile unsigned long pulseStart = 0;
 volatile int pulseWidth = 0;
 
 Preferences prefs; 
 AsyncWebServer server(80);
 
-// --- Fast Interrupt for RC PWM Input ---
+
 void IRAM_ATTR handlePWM() {
   if (digitalRead(inputPin) == HIGH) pulseStart = micros();
   else pulseWidth = micros() - pulseStart;
 }
 
-// --- Read Internal Servo Potentiometer ---
+
 void updateFeedback() {
   int rawADC = analogRead(feedbackPotPin);
   
-  // EMA Filter to smooth out internal potentiometer noise
+  
   filteredFeedback = (filterAlpha * rawADC) + ((1.0 - filterAlpha) * filteredFeedback);
 
-  // Convert to Degrees (assuming 12-bit ADC and direct drive gear ratio)
+ 
   currentDeg = (filteredFeedback / 4095.0) * maxDeg * gearRatio;
 }
 
@@ -57,7 +56,7 @@ void resetPID() {
 void driveMotor(int output) {
   float error = abs(targetDeg - currentDeg);
 
-  // 1. HARDWARE LIMIT CHECKS (Protect the internal pot)
+  
   if ((currentDeg <= minLimitDeg && output < 0) || 
       (currentDeg >= maxDeg && output > 0)) {
     ledcWrite(motorIN1, 0); 
@@ -65,17 +64,17 @@ void driveMotor(int output) {
     return; 
   }
 
-  // 2. DEADZONE: Stop motor if within tolerance to prevent jitter
+  
   if (!servoEnabled || error < tolerance) {
     ledcWrite(motorIN1, 0);
     ledcWrite(motorIN2, 0);
     return;
   }
 
-  // 3. Minimum starting power (overcome DC motor static friction)
+  
   int speed = constrain(abs(output), 45, 255); 
   
-  // 4. Drive via Hardware PWM (v3.x API)
+  
   if (output > 0) {
     ledcWrite(motorIN1, speed);
     ledcWrite(motorIN2, 0);
@@ -88,7 +87,7 @@ void driveMotor(int output) {
 void runPID() {
   currentError = targetDeg - currentDeg;
   
-  // Anti-windup for Integral
+  
   integral += currentError;
   integral = constrain(integral, -100, 100); 
   
@@ -171,32 +170,32 @@ void setup() {
   pinMode(inputPin, INPUT);
   pinMode(feedbackPotPin, INPUT);
 
-  // --- Initialize LEDC PWM (ESP32 v3.x API) ---
+
   ledcAttach(motorIN1, pwmFreq, pwmResolution);
   ledcAttach(motorIN2, pwmFreq, pwmResolution);
 
-  // Load Saved Data
+
   prefs.begin("servo-data", false);
   Kp = prefs.getFloat("kp", 2.0);
   Ki = prefs.getFloat("ki", 0.0);
   Kd = prefs.getFloat("kd", 0.1);
   tolerance = prefs.getFloat("tol", 1.0);
-  maxDeg = prefs.getFloat("maxDeg", 180.0); // Standard MG996R range
+  maxDeg = prefs.getFloat("maxDeg", 180.0);
   gearRatio = prefs.getFloat("ratio", 1.0);
   controlMode = prefs.getInt("mode", 0);
 
-  // INITIAL POTENTIOMETER READ
+
   filteredFeedback = analogRead(feedbackPotPin); 
   updateFeedback();
   
-  // SYNC target to prevent startup jump
+
   targetDeg = currentDeg; 
 
   if (controlMode == 1) attachInterrupt(digitalPinToInterrupt(inputPin), handlePWM, CHANGE);
 
   WiFi.softAP("SmartServo_Pro", "");
 
-  // API Routes
+
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *f){ f->send_P(200, "text/html", index_html); });
   
   server.on("/save", [](AsyncWebServerRequest *f){
@@ -244,7 +243,7 @@ void loop() {
 
   float rawInput = targetDeg;
 
-  if (controlMode == 1) { // RC PWM MODE
+  if (controlMode == 1) { 
     if (pulseWidth > 800 && pulseWidth < 2200) {
       // Map standard RC signals (1000us - 2000us) to physical limits
       rawInput = map(pulseWidth, 1000, 2000, 0, maxDeg);
@@ -252,16 +251,16 @@ void loop() {
   } 
   else if (controlMode == 2) { // ANALOG SIGNAL MODE
     int analogVal = 0;
-    for(int i=0; i<8; i++) analogVal += analogRead(inputPin); // Multi-sample average
+    for(int i=0; i<8; i++) analogVal += analogRead(inputPin); 
     rawInput = map(analogVal / 8, 0, 4095, 0, maxDeg);
   }
 
-  // Apply EMA smoothing to external targets to prevent aggressive snapping
+  
   if (controlMode != 0) {
     targetDeg = (filterAlpha * rawInput) + ((1.0 - filterAlpha) * targetDeg);
   }
 
-  // Final safety clamp before running PID
+ 
   targetDeg = constrain(targetDeg, minLimitDeg, maxDeg);
 
   runPID();
